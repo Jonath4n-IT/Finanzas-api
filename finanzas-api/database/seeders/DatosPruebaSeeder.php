@@ -14,6 +14,12 @@ class DatosPruebaSeeder extends Seeder
 {
     public function run(): void
     {
+        if (! app()->environment(['local', 'testing'])) {
+            $this->command?->warn('DatosPruebaSeeder solo se ejecuta en entornos local y testing.');
+
+            return;
+        }
+
         $usuarios = [
             'ana' => User::updateOrCreate(
                 ['email' => 'ana.lopez@example.com'],

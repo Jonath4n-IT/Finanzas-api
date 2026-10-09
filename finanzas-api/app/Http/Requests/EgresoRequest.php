@@ -10,18 +10,39 @@ class EgresoRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user() !== null;
+        $user = $this->user();
+
+        if ($user === null) {
+            return false;
+        }
+
+        if (($this->isMethod('PUT') || $this->isMethod('PATCH'))
+            && ! $user->egresos()->whereKey($this->route('egreso'))->exists()) {
+            abort(404);
+        }
+
+        return true;
     }
 
     public function rules(): array
     {
         $userId = $this->user()?->getAuthIdentifier();
+        $isPartialUpdate = $this->isMethod('PATCH');
+        $required = $isPartialUpdate ? 'sometimes' : 'required';
+        $categoriaId = $this->input('categoria_id');
+
+        if ($isPartialUpdate && ! $this->exists('categoria_id') && $this->exists('subcategoria_id')) {
+            $categoriaId = $this->user()
+                ->egresos()
+                ->whereKey($this->route('egreso'))
+                ->value('categoria_id');
+        }
 
         return [
-            'fecha' => ['required', 'date', 'before_or_equal:today'],
-            'descripcion' => ['required', 'string', 'max:150'],
+            'fecha' => [$required, 'date', 'before_or_equal:today'],
+            'descripcion' => [$required, 'string', 'max:150'],
             'categoria_id' => [
-                'required',
+                $required,
                 'integer',
                 Rule::exists('categorias', 'id')->where('tipo', 'egreso')->where(
                     fn (Builder $query) => $query->whereNull('user_id')
@@ -32,11 +53,20 @@ class EgresoRequest extends FormRequest
                 'sometimes',
                 'nullable',
                 'integer',
-                Rule::exists('subcategorias', 'id')->where(
-                    fn (Builder $query) => $query->where('categoria_id', $this->input('categoria_id'))
-                ),
+                Rule::exists('subcategorias', 'id')
+                    ->where('categoria_id', $categoriaId)
+                    ->where(function (Builder $query) use ($userId): void {
+                        $query->whereExists(function (Builder $query) use ($userId): void {
+                            $query->selectRaw('1')
+                                ->from('categorias')
+                                ->whereColumn('categorias.id', 'subcategorias.categoria_id')
+                                ->where('categorias.tipo', 'egreso')
+                                ->where(fn (Builder $query) => $query->whereNull('categorias.user_id')
+                                    ->orWhere('categorias.user_id', $userId));
+                        });
+                    }),
             ],
-            'monto' => ['required', 'numeric', 'gt:0', 'decimal:0,2', 'max:9999999999.99'],
+            'monto' => [$required, 'numeric', 'gt:0', 'decimal:0,2', 'max:9999999999.99'],
             'notas' => ['sometimes', 'nullable', 'string'],
         ];
     }
@@ -54,7 +84,7 @@ class EgresoRequest extends FormRequest
             'categoria_id.integer' => 'La categoría seleccionada no es válida.',
             'categoria_id.exists' => 'La categoría debe existir, ser de tipo egreso y pertenecer a tu cuenta o al sistema.',
             'subcategoria_id.integer' => 'La subcategoría seleccionada no es válida.',
-            'subcategoria_id.exists' => 'La subcategoría debe pertenecer a la categoría seleccionada.',
+            'subcategoria_id.exists' => 'La subcategoría debe pertenecer a una categoría de egreso permitida.',
             'monto.required' => 'El monto es obligatorio.',
             'monto.numeric' => 'El monto debe ser numérico.',
             'monto.gt' => 'El monto debe ser mayor que cero.',
